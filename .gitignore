@@ -21,9 +21,10 @@ go.work.sum
 # env file
 .env
 
-#docker files
+# Docker files
 Dockerfile
 compose.yaml
-
-#bash scripts
+# Ignore build files
+ContainMesh
+# Bash scripts
 *.sh
