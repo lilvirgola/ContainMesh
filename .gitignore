@@ -24,3 +24,6 @@ go.work.sum
 #docker files
 Dockerfile
 compose.yaml
+
+#bash scripts
+*.sh

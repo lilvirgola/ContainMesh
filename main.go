@@ -12,6 +12,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/moby/term"
 
@@ -24,7 +25,7 @@ import (
 func CreateNewContainer(image string, containerName string, networkName string, client *client.Client) (string, error) {
 	resp, err := client.ContainerCreate(context.Background(), &container.Config{
 		Image: image,
-		Cmd:   []string{"tail", "-f", "/dev/null"}, // Command to keep the container running
+		Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep the container running
 	},
 		&container.HostConfig{
 			Privileged: true, // Necessary to run the container in privileged mode
@@ -364,8 +365,9 @@ func main() {
 	numNetworks := flag.Int("n", 1, "Number of networks")
 	networkName := flag.String("N", "test_network", "Network name")
 	numLinks := flag.Int("l", 1, "Number of links")
-	path := flag.String("p", "./", "Set the path to the parent folder that contains the dockerfile")
-	IgnoreBuild := flag.Bool("b", false, "Ignore the build of the image")
+	path := flag.String("path", "./", "Set the path to the parent folder that contains the dockerfile")
+	ignoreBuild := flag.Bool("b", true, "Ignore the build of the image")
+	pullImage := flag.Bool("p", false, "Pull the image from the Docker Hub")
 
 	// Parsing the command line arguments
 	flag.Parse()
@@ -393,12 +395,23 @@ func main() {
 		return
 	}
 	// Build the Docker image
-	if !*IgnoreBuild {
+	if !*ignoreBuild {
 		err = BuildDockerImage(cli, *imageName, *path)
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
+	}
+
+	if *pullImage {
+		out, err := cli.ImagePull(context.Background(), "docker.io/library/"+*imageName, image.PullOptions{})
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		// Shows the pull output
+		termFd, isTerm := term.GetFdInfo(os.Stderr)
+		jsonmessage.DisplayJSONMessagesStream(out, os.Stderr, termFd, isTerm, nil)
 	}
 	// Create the virtual environment
 	matrix, err := CreateVirtualEnviroment(cli, *imageName, *numContainers, *networkName, *numNetworks, *numLinks)
