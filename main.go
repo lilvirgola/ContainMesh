@@ -3,12 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"strings"
+	"test/ContainMesh/config"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -84,7 +84,7 @@ func RemoveNetwork(cli *client.Client, networkID string) error {
 }
 
 // function to remove all the containers and networks
-func DeleteAll(cli *client.Client, imageName string, networkName string) error {
+func DeleteAll(cli *client.Client, config *config.Config) error {
 	// Get all the containers
 	containers, err := cli.ContainerList(context.Background(), container.ListOptions{
 		All: true,
@@ -96,7 +96,7 @@ func DeleteAll(cli *client.Client, imageName string, networkName string) error {
 	// Filter those whose name contains the image_name
 	for _, container := range containers {
 		for _, name := range container.Names {
-			if strings.Contains(name, imageName) {
+			if strings.Contains(name, *config.ImageName) {
 				containerIDs = append(containerIDs, container.ID[:12])
 			}
 		}
@@ -116,7 +116,7 @@ func DeleteAll(cli *client.Client, imageName string, networkName string) error {
 	var networkIDs []string
 	// Filter those whose name contains the network_name
 	for _, network := range networks {
-		if strings.Contains(network.Name, networkName) {
+		if strings.Contains(network.Name, *config.NetworkName) {
 			networkIDs = append(networkIDs, network.ID)
 		}
 	}
@@ -174,14 +174,14 @@ func GetContext(filePath string) io.Reader {
 }
 
 // Function to build the Docker image
-func BuildDockerImage(client *client.Client, imageName string, parentFolder string) error {
+func BuildDockerImage(client *client.Client, config *config.Config) error {
 	// Define the build context
-	buildContext := GetContext(parentFolder)
+	buildContext := GetContext(*config.DockerFilePath)
 
 	// Configure the build options
 	buildOptions := types.ImageBuildOptions{
-		Dockerfile: "Dockerfile",        // Name of the Dockerfile
-		Tags:       []string{imageName}, // Name of the image
+		Dockerfile: "Dockerfile",                // Name of the Dockerfile
+		Tags:       []string{*config.ImageName}, // Name of the image
 
 	}
 
@@ -194,7 +194,7 @@ func BuildDockerImage(client *client.Client, imageName string, parentFolder stri
 	// Shows the build output
 	termFd, isTerm := term.GetFdInfo(os.Stderr)
 	jsonmessage.DisplayJSONMessagesStream(buildResponse.Body, os.Stderr, termFd, isTerm, nil)
-	fmt.Printf("Image %s built successfully\n", imageName)
+	fmt.Printf("Image %s built successfully\n", *config.ImageName)
 	return nil
 }
 
@@ -214,17 +214,17 @@ func ConnectNetworks(cli *client.Client, network1 int, network2 int, networkName
 	return nil
 }
 
-// Function to create the links between the networks given the adjacency matrix
-func CreateLinks(cli *client.Client, imageName string, numContainers int, networkName string, numNetworks int, numLinks int) ([][]int, error) {
+// Function to create the adjacency matrix
+func CreateMatrix(numNetworks int) *[][]bool {
 	// Create the matrix of links
-	matrix := make([][]int, numNetworks)
-	fmt.Println("Please replay at the following question for creating the adjacency matrix:")
+	matrix := make([][]bool, numNetworks)
+	fmt.Println("Please replay at the following questions for creating the adjacency matrix:")
 	//read the matrix
 	reader := bufio.NewReader(os.Stdin)
 	readMatrix := true
 	for readMatrix {
 		for i := 0; i < numNetworks; i++ {
-			matrix[i] = make([]int, numNetworks)
+			matrix[i] = make([]bool, numNetworks)
 			for j := 0; j < numNetworks; j++ {
 				if i == j {
 					continue
@@ -233,26 +233,14 @@ func CreateLinks(cli *client.Client, imageName string, numContainers int, networ
 				text, _ := reader.ReadString('\n')
 				text = strings.Replace(text, "\n", "", -1)
 				if strings.ToUpper(text) == "Y" {
-					matrix[i][j] = 1
+					matrix[i][j] = true
 				} else {
-					matrix[i][j] = 0
+					matrix[i][j] = false
 				}
 			}
 		}
-		// Print the adjacency matrix and ask if it is correct
-		fmt.Println("The adjacency matrix is:")
-		fmt.Print("  ")
-		for i := 0; i < numNetworks; i++ {
-			fmt.Printf("%d ", i)
-		}
-		fmt.Println()
-		for i := 0; i < numNetworks; i++ {
-			fmt.Printf("%d ", i)
-			for j := 0; j < numNetworks; j++ {
-				fmt.Printf("%d ", matrix[i][j])
-			}
-			fmt.Println()
-		}
+		// Print the matrix
+		PrintMatrix(&matrix, numNetworks)
 		fmt.Print("Is the adjacency matrix correct?(Y/N): ")
 		text, _ := reader.ReadString('\n')
 		text = strings.Replace(text, "\n", "", -1)
@@ -260,48 +248,55 @@ func CreateLinks(cli *client.Client, imageName string, numContainers int, networ
 			readMatrix = false
 		}
 	}
+	return &matrix
+}
+
+// Function to create the links between the networks given the adjacency matrix
+func CreateLinks(cli *client.Client, config *config.Config) error {
+	if config.NetMatrix == nil {
+		config.NetMatrix = *CreateMatrix(*config.NumNetworks)
+	}
 	// Create the links
-	for i := 0; i < numNetworks; i++ {
-		for j := 0; j < numNetworks; j++ {
-			if matrix[i][j] == 1 {
+	for i := 0; i < *config.NumNetworks; i++ {
+		for j := 0; j < *config.NumNetworks; j++ {
+			if (config.NetMatrix)[i][j] && i != j { // If there is a link between the networks and they are different
 				// Connect the containers to the network
-				err := ConnectNetworks(cli, i, j, networkName, imageName, numContainers, numNetworks, numLinks)
+				err := ConnectNetworks(cli, i, j, *config.NetworkName, *config.ImageName, *config.NumContainers, *config.NumNetworks, *config.NumLinks)
 				if err != nil {
-					return nil, fmt.Errorf("error during the linking of 2 networks: %v", err)
+					return fmt.Errorf("error during the linking of 2 networks: %v", err)
 				}
 			}
 		}
 	}
 
-	return matrix, nil
+	return nil
 }
 
 // Function to create the virtual environment eg. the networks, the containers and the links
-func CreateVirtualEnviroment(cli *client.Client, imageName string, numContainers int, networkName string, numNetworks int, numLinks int) ([][]int, error) {
+func CreateVirtualEnviroment(cli *client.Client, config *config.Config) error {
 	// Create the networks
-	err := CreateNetworks(cli, networkName, numNetworks)
+	err := CreateNetworks(cli, *config.NetworkName, *config.NumNetworks)
 	if err != nil {
-		return nil, fmt.Errorf("error during the creation of the networks: %v", err)
+		return fmt.Errorf("error during the creation of the networks: %v", err)
 	}
 	// Create the containers
-	err = CreateContainers(cli, imageName, numContainers, networkName, numNetworks)
+	err = CreateContainers(cli, *config.ImageName, *config.NumContainers, *config.NetworkName, *config.NumNetworks)
 	if err != nil {
-		return nil, fmt.Errorf("error during the creation of the containers: %v", err)
+		return fmt.Errorf("error during the creation of the containers: %v", err)
 	}
-	var matrix [][]int
 	// Create the links if there are more than 1 network
-	if numNetworks > 1 {
-		matrix, err = CreateLinks(cli, imageName, numContainers, networkName, numNetworks, numLinks)
+	if *config.NumNetworks > 1 {
+		err = CreateLinks(cli, config)
 		if err != nil {
-			return nil, fmt.Errorf("error during the creation of the links: %v", err)
+			return fmt.Errorf("error during the creation of the links: %v", err)
 		}
 	}
 
-	return matrix, nil
+	return nil
 }
 
 // Function to create the bash script to connect to the containers
-func CreateConnectScript(imageName string, numContainers int) error {
+func CreateConnectScript(config *config.Config) error {
 	// Nome del file bash che vogliamo creare
 	filename := "connect_to_host.sh"
 
@@ -331,14 +326,14 @@ case $1 in
     *) ;;
 esac
 
-if [ "$1" -ge "` + strconv.Itoa(numContainers) + `" ]; then
-    echo "the container number must be less than ` + strconv.Itoa(numContainers) + `"
+if [ "$1" -ge "` + strconv.Itoa(*config.NumContainers) + `" ]; then
+    echo "the container number must be less than ` + strconv.Itoa(*config.NumContainers) + `"
 	exit 1
 elif [ "$1" -lt 0 ]; then
 	echo "the container number must be greater than 0"
 	exit 1
 else
-	sudo docker container exec -it cont_` + imageName + `$1 /bin/bash
+	sudo docker container exec -it cont_` + *config.ImageName + `$1 /bin/sh
 fi
 `
 
@@ -358,25 +353,43 @@ fi
 	return nil
 }
 
+func PrintMatrix(matrix *[][]bool, numNetwork int) {
+	fmt.Println("The adjacency matrix is:")
+	fmt.Print("  ")
+	for i := 0; i < numNetwork; i++ {
+		fmt.Printf("%d ", i)
+	}
+	fmt.Println()
+	for i := 0; i < numNetwork; i++ {
+		fmt.Printf("%d ", i)
+		for j := 0; j < numNetwork; j++ {
+			if (*matrix)[i][j] {
+				fmt.Printf("%d ", 1)
+			} else {
+				if i == j {
+					fmt.Print("X ")
+				} else {
+					fmt.Printf("%d ", 0)
+				}
+			}
+		}
+		fmt.Println()
+	}
+}
+
 func main() {
 	// Command line arguments
-	imageName := flag.String("i", "test_name", "Image name")
-	numContainers := flag.Int("c", 5, "Number of containers")
-	numNetworks := flag.Int("n", 1, "Number of networks")
-	networkName := flag.String("N", "test_network", "Network name")
-	numLinks := flag.Int("l", 1, "Number of links")
-	path := flag.String("path", "./", "Set the path to the parent folder that contains the dockerfile")
-	ignoreBuild := flag.Bool("b", true, "Ignore the build of the image")
-	pullImage := flag.Bool("p", false, "Pull the image from the Docker Hub")
+	config, err := config.ProcessCommandLineArgs()
+	if err != nil {
+		fmt.Printf("error during the parsing of the command line args: %v \n", err)
+		return
+	}
 
-	// Parsing the command line arguments
-	flag.Parse()
-
-	if *numContainers < 1 || *numNetworks < 1 || *numLinks < 1 {
+	if *config.NumContainers < 1 || *config.NumNetworks < 1 || *config.NumLinks < 1 {
 		fmt.Println("The number of containers, networks and links must be greater than 0")
 		os.Exit(1)
 	}
-	if *numContainers < *numLinks {
+	if *config.NumContainers < *config.NumLinks {
 		fmt.Println("The number of containers must be greater than the number of links")
 		os.Exit(1)
 	}
@@ -389,22 +402,22 @@ func main() {
 	defer cli.Close()
 
 	// Remove all the containers and networks if they already exist
-	err = DeleteAll(cli, *imageName, *networkName)
+	err = DeleteAll(cli, config)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 	// Build the Docker image
-	if !*ignoreBuild {
-		err = BuildDockerImage(cli, *imageName, *path)
+	if !*config.IgnoreBuild {
+		err = BuildDockerImage(cli, config)
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
 	}
 
-	if *pullImage {
-		out, err := cli.ImagePull(context.Background(), "docker.io/library/"+*imageName, image.PullOptions{})
+	if *config.PullImage {
+		out, err := cli.ImagePull(context.Background(), "docker.io/library/"+*config.ImageName, image.PullOptions{})
 		if err != nil {
 			fmt.Println(err)
 			return
@@ -414,14 +427,14 @@ func main() {
 		jsonmessage.DisplayJSONMessagesStream(out, os.Stderr, termFd, isTerm, nil)
 	}
 	// Create the virtual environment
-	matrix, err := CreateVirtualEnviroment(cli, *imageName, *numContainers, *networkName, *numNetworks, *numLinks)
+	err = CreateVirtualEnviroment(cli, config)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 
 	// Create the bash script to connect to the containers
-	err = CreateConnectScript(*imageName, *numContainers)
+	err = CreateConnectScript(config)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -433,27 +446,17 @@ func main() {
 		fmt.Scanln(&choice)
 		choice = strings.ToUpper(choice)
 		if choice == "M" {
-			if *numNetworks == 1 {
+			if *config.NumNetworks == 1 {
 				fmt.Println("The adjacency matrix is not available because there is only 1 network")
 			} else {
-				fmt.Println("The adjacency matrix is:")
-				fmt.Print("  ")
-				for i := 0; i < *numNetworks; i++ {
-					fmt.Printf("%d ", i)
-				}
-				fmt.Println()
-				for i := 0; i < *numNetworks; i++ {
-					fmt.Printf("%d ", i)
-					for j := 0; j < *numNetworks; j++ {
-						fmt.Printf("%d ", matrix[i][j])
-					}
-					fmt.Println()
-				}
+				PrintMatrix(&config.NetMatrix, *config.NumNetworks)
 			}
+		} else if choice != "Q" {
+			fmt.Println("Invalid choice")
 		}
 	}
 	// Remove all the containers and networks
-	err = DeleteAll(cli, *imageName, *networkName)
+	err = DeleteAll(cli, config)
 	if err != nil {
 		fmt.Println(err)
 		return

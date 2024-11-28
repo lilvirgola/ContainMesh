@@ -1,0 +1,15 @@
+# EXAMPLE OF A STRUCTURE FILE
+ImageSettings:
+  DockerFilePath: ./Dockerfile
+  # ImageName: busybox
+  IgnoreBuild: true
+  PullImage: false
+NetworkSettings:
+  NetworkName: my-network
+  NumLinks: 1
+  NumContainers: 5
+  NumNetworks: 3
+  NetMatrix:
+    - [false,true,true]
+    - [true,false,true]
+    - [true,true,false]
