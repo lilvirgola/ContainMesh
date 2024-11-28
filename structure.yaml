@@ -1,7 +1,7 @@
 # EXAMPLE OF A STRUCTURE FILE
 ImageSettings:
   DockerFilePath: ./Dockerfile
-  # ImageName: busybox
+  ImageName: my-image
   IgnoreBuild: true
   PullImage: false
 NetworkSettings:

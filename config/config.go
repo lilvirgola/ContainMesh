@@ -59,17 +59,30 @@ func ParseYamlConfig(config *Config) error {
 		if len(yamlConf.NetworkSettings.NetMatrix) != len(yamlConf.NetworkSettings.NetMatrix[0]) {
 			return fmt.Errorf("the matrix is not square")
 		}
+		config.NetMatrix = yamlConf.NetworkSettings.NetMatrix
 	}
 	// Set the values of the config struct
-	config.ImageName = &yamlConf.ImageSettings.ImageName
-	config.NumContainers = &yamlConf.NetworkSettings.NumContainers
-	config.NumNetworks = &yamlConf.NetworkSettings.NumNetworks
-	config.NumLinks = &yamlConf.NetworkSettings.NumLinks
-	config.NetworkName = &yamlConf.NetworkSettings.NetworkName
+	if yamlConf.ImageSettings.ImageName != "" {
+		config.ImageName = &yamlConf.ImageSettings.ImageName
+	}
+	if yamlConf.NetworkSettings.NumContainers != 0 {
+		config.NumContainers = &yamlConf.NetworkSettings.NumContainers
+	}
+	if yamlConf.NetworkSettings.NumNetworks != 0 {
+		config.NumNetworks = &yamlConf.NetworkSettings.NumNetworks
+	}
+	if yamlConf.NetworkSettings.NumLinks != 0 {
+		config.NumLinks = &yamlConf.NetworkSettings.NumLinks
+	}
+	if yamlConf.NetworkSettings.NetworkName != "" {
+		config.NetworkName = &yamlConf.NetworkSettings.NetworkName
+	}
+	if yamlConf.ImageSettings.DockerFilePath != "" {
+		config.DockerFilePath = &yamlConf.ImageSettings.DockerFilePath
+	}
 	config.IgnoreBuild = &yamlConf.ImageSettings.IgnoreBuild
 	config.PullImage = &yamlConf.ImageSettings.PullImage
-	config.DockerFilePath = &yamlConf.ImageSettings.DockerFilePath
-	config.NetMatrix = yamlConf.NetworkSettings.NetMatrix
+
 	return nil
 }
 
