@@ -38,6 +38,9 @@ type Config struct {
 	NetMatrix      [][]bool
 }
 
+// ParseYamlConfig reads the yaml file and sets the values of the config struct
+// It take the config struct as an argument
+// It returns an error if the yaml file is not found, if the unmarshal fails, if the number of networks is not equal to the number of rows in the matrix, if the matrix is not square
 func ParseYamlConfig(config *Config) error {
 	filename, _ := filepath.Abs(*config.YamlFilePath)
 	yamlFile, err := os.ReadFile(filename)
@@ -86,6 +89,8 @@ func ParseYamlConfig(config *Config) error {
 	return nil
 }
 
+// ProcessCommandLineArgs processes the command line arguments and returns the config struct
+// It returns an error if the yaml file is not found, if the unmarshal fails, if the number of networks is not equal to the number of rows in the matrix, if the matrix is not square
 func ProcessCommandLineArgs() (*Config, error) {
 	config := &Config{
 		ImageName:      flag.String("i", "test_name", "Image name"),

@@ -1,0 +1,100 @@
+<head>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+</head>
+<body>
+    <div id="network" style="width: 800px; height: 600px;"></div>
+</body>
+<script type="text/javascript">
+    document.addEventListener("DOMContentLoaded", function () {
+        
+        fetch('https://api.example.com/data')
+            .then(response => {
+                if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log(data); // Dati ricevuti dall'AP
+            })
+            .catch(error => {
+                console.error('Errore nella richiesta:', error);
+            });
+      const n = 3; // Numero di reti
+      const m = 5; // Numero di nodi per rete
+  
+      const nodes = [];
+      const edges = [];
+  
+      let nodeId = 1;
+      const centerNodes = [];
+  
+      for (let i = 0; i < n; i++) {
+        const centerNodeId = nodeId++;
+        centerNodes.push(centerNodeId);
+        nodes.push({ id: centerNodeId, label: `Rete ${i + 1}`, group: `Rete-${i}` });
+  
+        for (let j = 0; j < m; j++) {
+          const childNodeId = nodeId++;
+          nodes.push({ id: childNodeId, label: `Nodo ${i + 1}.${j + 1}`, group: `Rete-${i}` });
+          edges.push({ from: centerNodeId, to: childNodeId });
+        }
+      }
+  
+      for (let i = 0; i < centerNodes.length - 1; i++) {
+        for (let j = i + 1; j < centerNodes.length; j++) {
+          edges.push({ from: centerNodes[i], to: centerNodes[j], label: `Edge R${i+1}-R${j+1}` });
+        }
+      }
+  
+      const container = document.getElementById('network');
+      const data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+      const options = {
+        nodes: { shape: 'dot', size: 15 },
+        physics: { stabilization: false },
+        groups: {
+          'Rete-0': { color: { background: '#ff9999' } },
+          'Rete-1': { color: { background: '#99ccff' } },
+          'Rete-2': { color: { background: '#99ff99' } },
+        }
+      };
+  
+      const network = new vis.Network(container, data, options);
+  
+      // Aggiungi evento per mostrare opzioni al clic su un nodo
+      network.on("selectNode", function (params) {
+        const nodeId = params.nodes[0];
+        const nodeLabel = nodes.find(node => node.id === nodeId).label;
+  
+        // Crea un semplice menu contestuale
+        const menu = document.createElement("div");
+        menu.id = "context-menu";
+        menu.style.position = "absolute";
+        menu.style.top = `${params.pointer.DOM.y}px`;
+        menu.style.left = `${params.pointer.DOM.x}px`;
+        menu.style.backgroundColor = "#fff";
+        menu.style.border = "1px solid #ccc";
+        menu.style.padding = "10px";
+        menu.innerHTML = `
+          <p><strong>Opzioni per: ${nodeLabel}</strong></p>
+          <button onclick="alert('Azione 1 su ${nodeLabel}')">Azione 1</button>
+          <button onclick="alert('Azione 2 su ${nodeLabel}')">Azione 2</button>
+          <button onclick="closeMenu()">Chiudi</button>
+        `;
+  
+        document.body.appendChild(menu);
+      });
+  
+      // Aggiungi evento per chiudere il menu quando si clicca fuori
+      network.on("deselectNode", function () {
+        closeMenu();
+      });
+  
+      // Funzione per chiudere il menu contestuale
+      window.closeMenu = function () {
+        const menu = document.getElementById("context-menu");
+        if (menu) menu.remove();
+      };
+    });
+  </script>
+  

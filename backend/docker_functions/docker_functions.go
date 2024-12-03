@@ -1,4 +1,4 @@
-package main
+package docker_functions
 
 import (
 	"bufio"
@@ -6,22 +6,25 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"test/ContainMesh/config"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
-	"github.com/moby/term"
-
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/jsonmessage"
+	"github.com/gin-gonic/gin"
+	"github.com/moby/term"
 )
 
-// Function to create a container from an image in a specified network
+var stoppedContainers []int // List of stopped containers
+
+// CreateNewContainer creates a new container given the image name, the container name, the network name and a pointer to a Docker client
+// It returns the container ID and an error if the container creation fails
 func CreateNewContainer(image string, containerName string, networkName string, client *client.Client) (string, error) {
 	resp, err := client.ContainerCreate(context.Background(), &container.Config{
 		Image: image,
@@ -44,7 +47,8 @@ func CreateNewContainer(image string, containerName string, networkName string, 
 	return resp.ID, nil
 }
 
-// Function to remove a container given its ID
+// RemoveContainer removes a container given its ID and a pointer to a Docker client
+// It returns an error if the container removal fails
 func RemoveContainer(cli *client.Client, containerID string) error {
 	// ContainerRemove options allow you to force stop a container before removing
 	removeOptions := container.RemoveOptions{
@@ -59,7 +63,8 @@ func RemoveContainer(cli *client.Client, containerID string) error {
 	return nil
 }
 
-// Function to build a Docker network
+// CreateNetwork creates a new network given the network name and a pointer to a Docker client
+// It returns the network Docker ID and an error if the network creation fails
 func CreateNetwork(name string, client *client.Client) (string, error) {
 	// Create the network
 	network, err := client.NetworkCreate(context.Background(), name, network.CreateOptions{
@@ -73,7 +78,8 @@ func CreateNetwork(name string, client *client.Client) (string, error) {
 	return network.ID, nil
 }
 
-// Function to remove a network given its ID
+// RemoveNetwork removes a network given its ID and a pointer to a Docker client
+// It returns an error if the network removal fails
 func RemoveNetwork(cli *client.Client, networkID string) error {
 	// Remove the network
 	if err := cli.NetworkRemove(context.Background(), networkID); err != nil {
@@ -83,7 +89,8 @@ func RemoveNetwork(cli *client.Client, networkID string) error {
 	return nil
 }
 
-// function to remove all the containers and networks
+// DeleteAll removes all the containers and networks that contain the image_name and network_name
+// It returns an error if the removal fails
 func DeleteAll(cli *client.Client, config *config.Config) error {
 	// Get all the containers
 	containers, err := cli.ContainerList(context.Background(), container.ListOptions{
@@ -130,7 +137,13 @@ func DeleteAll(cli *client.Client, config *config.Config) error {
 	return nil
 }
 
-// Function to create all the containers of all the networks
+// ContainerNameFromNodeNumber returns the container name given the node number and the image name
+func ContainerNameFromNodeNumber(nodeNumber int, imageName string) string {
+	return "cont_" + imageName + strconv.Itoa(nodeNumber)
+}
+
+// CreateContainers creates n containers given the image name, the number of containers, the network name and the number of networks and a pointer to a Docker client
+// It returns an error if the container creation fails
 func CreateContainers(cli *client.Client, imageName string, numContainers int, networkName string, numNetworks int) error {
 	cont := 0
 	//for each network
@@ -138,7 +151,7 @@ func CreateContainers(cli *client.Client, imageName string, numContainers int, n
 		netName := networkName + strconv.Itoa(j)
 		//create the n containers
 		for i := 0; i < numContainers; i++ {
-			containerName := "cont_" + imageName + strconv.Itoa(cont)
+			containerName := ContainerNameFromNodeNumber(cont, imageName)
 			contId, err := CreateNewContainer(imageName, containerName, netName, cli)
 			if err != nil {
 				return fmt.Errorf("error during the creation of the container: %v", err)
@@ -154,7 +167,71 @@ func CreateContainers(cli *client.Client, imageName string, numContainers int, n
 	return nil
 }
 
-// Function to create all the networks
+// StopContainer stops a container given its ID and a pointer to a Docker client
+// It returns an error if the container stopping fails
+func StopContainer(cli *client.Client, nodeNumber int, imageName string) error {
+	containerName := ContainerNameFromNodeNumber(nodeNumber, imageName)
+	containerID, err := GetContainerID(cli, containerName)
+	if err != nil {
+		return fmt.Errorf("error during the retrieval of the container ID: %v", err)
+	}
+	err = cli.ContainerStop(context.Background(), containerID, container.StopOptions{})
+	// Stop the container
+	if err != nil {
+		return fmt.Errorf("error during the halting of the container %s:%v", containerID, err)
+	}
+	stoppedContainers = append(stoppedContainers, nodeNumber)
+	fmt.Printf("Container %s stopped successfully\n", containerID)
+	return nil
+}
+
+// RestartContainer restarts a container given its ID and a pointer to a Docker client
+// It returns an error if the container restarting fails
+func RestartContainer(cli *client.Client, nodeNumber int, imageName string) error {
+	containerName := ContainerNameFromNodeNumber(nodeNumber, imageName)
+	containerID, err := GetContainerID(cli, containerName)
+	if err != nil {
+		return fmt.Errorf("error during the retrieval of the container ID: %v", err)
+	}
+	sort.Ints(stoppedContainers)
+	i := sort.SearchInts(stoppedContainers, nodeNumber)
+	if i < len(stoppedContainers) && stoppedContainers[i] == nodeNumber {
+		err := cli.ContainerStart(context.Background(), containerID, container.StartOptions{})
+		// Restart the container
+		if err != nil {
+			return fmt.Errorf("error during the restart of the container %s:%v", containerID, err)
+		}
+		fmt.Printf("Container %s restarted successfully\n", containerID)
+	} else {
+		return fmt.Errorf("container %s is not stopped", containerID)
+	}
+	return nil
+}
+
+// GetContainerID returns the ID of a container given its name and a pointer to a Docker client
+func GetContainerID(cli *client.Client, containerName string) (string, error) {
+	containers, err := cli.ContainerList(context.Background(), container.ListOptions{
+		All: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	for _, container := range containers {
+		for _, name := range container.Names {
+			if name == "/"+containerName {
+				return container.ID, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("container %s not found", containerName)
+}
+
+func GetStoppedContainers() []int {
+	return stoppedContainers
+}
+
+// CreateNetworks creates n networks given the network name and the number of networks and a pointer to a Docker client
+// It returns an error if the network creation fails
 func CreateNetworks(cli *client.Client, networkName string, numNetworks int) error {
 	for i := 0; i < numNetworks; i++ {
 		netName := networkName + strconv.Itoa(i)
@@ -167,13 +244,15 @@ func CreateNetworks(cli *client.Client, networkName string, numNetworks int) err
 	return nil
 }
 
-// Function to get the context of the build
+// GetContext returns the context of the build given the file path
+// It returns the context of the build as an io.Reader
 func GetContext(filePath string) io.Reader {
 	ctx, _ := archive.TarWithOptions(filePath, &archive.TarOptions{})
 	return ctx
 }
 
-// Function to build the Docker image
+// BuildDockerImage builds a Docker image given a pointer to a Docker client and a pointer to the config struct
+// It returns an error if the image building fails
 func BuildDockerImage(client *client.Client, config *config.Config) error {
 	// Define the build context
 	buildContext := GetContext(*config.DockerFilePath)
@@ -198,13 +277,14 @@ func BuildDockerImage(client *client.Client, config *config.Config) error {
 	return nil
 }
 
-// Function to connect 2 networks by adding a node of the first network to the second network
+// ConnectNetworks connects the containers of the first network to the second network given the network IDs, the container name, the image name, the number of containers, the number of networks, the number of links adn a pointer to a Docker client
+// It returns an error if the connection fails
 func ConnectNetworks(cli *client.Client, network1 int, network2 int, networkName string, imageName string, numContainers int, numNetworks int, numLinks int) error {
 	netName2 := networkName + strconv.Itoa(network2)
 	for i := 0; i < numLinks; i++ {
 		//select container on the first network
 		container1 := "cont_" + imageName + strconv.Itoa(network1*numContainers+i)
-		//connect the container to the second network
+		//connect the container to the second network// Function to connect 2 networks by adding a node of the first network to the second network
 		err := cli.NetworkConnect(context.Background(), netName2, container1, nil)
 		if err != nil {
 			return fmt.Errorf("error during the connection of the container to the network: %v", err)
@@ -214,7 +294,30 @@ func ConnectNetworks(cli *client.Client, network1 int, network2 int, networkName
 	return nil
 }
 
-// Function to create the adjacency matrix
+// CreateLinks creates the links between the networks given the pointer to a Docker client and a pointer to the config struct
+// It returns an error if the linking fails
+func CreateLinks(cli *client.Client, config *config.Config) error {
+	if config.NetMatrix == nil {
+		config.NetMatrix = *CreateMatrix(*config.NumNetworks)
+	}
+	// Create the links
+	for i := 0; i < *config.NumNetworks; i++ {
+		for j := 0; j < *config.NumNetworks; j++ {
+			if (config.NetMatrix)[i][j] && i != j { // If there is a link between the networks and they are different
+				// Connect the containers to the network
+				err := ConnectNetworks(cli, i, j, *config.NetworkName, *config.ImageName, *config.NumContainers, *config.NumNetworks, *config.NumLinks)
+				if err != nil {
+					return fmt.Errorf("error during the linking of 2 networks: %v", err)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// CreateMatrix creates the adjacency matrix given the number of networks
+// It returns a pointer to the adjacency matrix
 func CreateMatrix(numNetworks int) *[][]bool {
 	// Create the matrix of links
 	matrix := make([][]bool, numNetworks)
@@ -251,108 +354,7 @@ func CreateMatrix(numNetworks int) *[][]bool {
 	return &matrix
 }
 
-// Function to create the links between the networks given the adjacency matrix
-func CreateLinks(cli *client.Client, config *config.Config) error {
-	if config.NetMatrix == nil {
-		config.NetMatrix = *CreateMatrix(*config.NumNetworks)
-	}
-	// Create the links
-	for i := 0; i < *config.NumNetworks; i++ {
-		for j := 0; j < *config.NumNetworks; j++ {
-			if (config.NetMatrix)[i][j] && i != j { // If there is a link between the networks and they are different
-				// Connect the containers to the network
-				err := ConnectNetworks(cli, i, j, *config.NetworkName, *config.ImageName, *config.NumContainers, *config.NumNetworks, *config.NumLinks)
-				if err != nil {
-					return fmt.Errorf("error during the linking of 2 networks: %v", err)
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// Function to create the virtual environment eg. the networks, the containers and the links
-func CreateVirtualEnviroment(cli *client.Client, config *config.Config) error {
-	// Create the networks
-	err := CreateNetworks(cli, *config.NetworkName, *config.NumNetworks)
-	if err != nil {
-		return fmt.Errorf("error during the creation of the networks: %v", err)
-	}
-	// Create the containers
-	err = CreateContainers(cli, *config.ImageName, *config.NumContainers, *config.NetworkName, *config.NumNetworks)
-	if err != nil {
-		return fmt.Errorf("error during the creation of the containers: %v", err)
-	}
-	// Create the links if there are more than 1 network
-	if *config.NumNetworks > 1 {
-		err = CreateLinks(cli, config)
-		if err != nil {
-			return fmt.Errorf("error during the creation of the links: %v", err)
-		}
-	}
-
-	return nil
-}
-
-// Function to create the bash script to connect to the containers
-func CreateConnectScript(config *config.Config) error {
-	// Nome del file bash che vogliamo creare
-	filename := "connect_to_host.sh"
-
-	// Crea il file
-	file, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("error during the creation of the bash script: %v", err)
-	}
-	defer file.Close()
-
-	// Bash commands to write in the file
-	bashScript := `#!/bin/bash
-if [ -z "$1" ]; then
-    echo "This script is used to enter a container by its number
-	Usage:
-	$0 <container_number>
-	"
-    exit 1
-fi
-
-case $1 in
-    ''|*[!0-9]*) echo "This script is used to enter a container by its number
-	Usage:
-	$0 <container_number>
-	"
-    exit 1 ;;
-    *) ;;
-esac
-
-if [ "$1" -ge "` + strconv.Itoa(*config.NumContainers) + `" ]; then
-    echo "the container number must be less than ` + strconv.Itoa(*config.NumContainers) + `"
-	exit 1
-elif [ "$1" -lt 0 ]; then
-	echo "the container number must be greater than 0"
-	exit 1
-else
-	sudo docker container exec -it cont_` + *config.ImageName + `$1 /bin/sh
-fi
-`
-
-	// Write the commands in the file
-	_, err = file.WriteString(bashScript)
-	if err != nil {
-		return fmt.Errorf("error during the writing of the bash script: %v", err)
-	}
-
-	// Set the perms
-	err = os.Chmod(filename, 0755)
-	if err != nil {
-		return fmt.Errorf("error during the setting of the permissions: %v", err)
-	}
-
-	fmt.Println("Bash script successfully created:", filename)
-	return nil
-}
-
+// PrintMatrix prints the adjacency matrix given a pointer to the matrix and the number of networks
 func PrintMatrix(matrix *[][]bool, numNetwork int) {
 	fmt.Println("The adjacency matrix is:")
 	fmt.Print("  ")
@@ -377,94 +379,13 @@ func PrintMatrix(matrix *[][]bool, numNetwork int) {
 	}
 }
 
-func main() {
-	// Command line arguments
-	config, err := config.ProcessCommandLineArgs()
-	if err != nil {
-		fmt.Printf("error during the parsing of the command line args: %v \n", err)
-		return
+func GetGraphEncoding(config *config.Config) gin.H {
+	graph := gin.H{
+		"NumNetworks":       *config.NumNetworks,
+		"NumContainers":     *config.NumContainers,
+		"NumLinks":          *config.NumLinks,
+		"StoppedContainers": stoppedContainers,
+		"NetMatrix":         config.NetMatrix,
 	}
-
-	if *config.NumContainers < 1 || *config.NumNetworks < 1 || *config.NumLinks < 1 {
-		fmt.Println("The number of containers, networks and links must be greater than 0")
-		os.Exit(1)
-	}
-	if *config.NumContainers < *config.NumLinks {
-		fmt.Println("The number of containers must be greater than the number of links")
-		os.Exit(1)
-	}
-	// Create a new Docker client
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer cli.Close()
-
-	// Remove all the containers and networks if they already exist
-	err = DeleteAll(cli, config)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	// Build the Docker image
-	if !*config.IgnoreBuild {
-		err = BuildDockerImage(cli, config)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-	}
-
-	if *config.PullImage {
-		out, err := cli.ImagePull(context.Background(), "docker.io/library/"+*config.ImageName, image.PullOptions{})
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		// Shows the pull output
-		termFd, isTerm := term.GetFdInfo(os.Stderr)
-		jsonmessage.DisplayJSONMessagesStream(out, os.Stderr, termFd, isTerm, nil)
-	}
-	// Create the virtual environment
-	err = CreateVirtualEnviroment(cli, config)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	// Create the bash script to connect to the containers
-	err = CreateConnectScript(config)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	// Wait for the user to press Q to remove all the containers and networks
-	var choice string
-	for choice != "Q" {
-		fmt.Println("Press Q to remove all the containers and networks, M to print the network adjacency matrix(Q/M): ")
-		fmt.Scanln(&choice)
-		choice = strings.ToUpper(choice)
-		if choice == "M" {
-			if *config.NumNetworks == 1 {
-				fmt.Println("The adjacency matrix is not available because there is only 1 network")
-			} else {
-				PrintMatrix(&config.NetMatrix, *config.NumNetworks)
-			}
-		} else if choice != "Q" {
-			fmt.Println("Invalid choice")
-		}
-	}
-	// Remove all the containers and networks
-	err = DeleteAll(cli, config)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	// Remove the bash script
-	err = os.Remove("connect_to_host.sh")
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	return graph
 }
