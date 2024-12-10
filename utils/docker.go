@@ -1,6 +1,7 @@
-package docker_functions
+package utils
 
 import (
+	"ContainMesh/config"
 	"bufio"
 	"context"
 	"fmt"
@@ -9,8 +10,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"test/ContainMesh/config"
+	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
@@ -25,7 +27,8 @@ var stoppedContainers []int // List of stopped containers
 
 // CreateNewContainer creates a new container given the image name, the container name, the network name and a pointer to a Docker client
 // It returns the container ID and an error if the container creation fails
-func CreateNewContainer(image string, containerName string, networkName string, client *client.Client) (string, error) {
+func CreateNewContainer(image string, containerName string, networkName string, client *client.Client, p *tea.Program) (string, error) {
+	start := time.Now()
 	resp, err := client.ContainerCreate(context.Background(), &container.Config{
 		Image: image,
 		Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep the container running
@@ -43,14 +46,16 @@ func CreateNewContainer(image string, containerName string, networkName string, 
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("Container %s created successfully\n", containerName)
+	end := time.Now()
+	p.Send(resultMsg{end.Sub(start), fmt.Sprintf("Container %s created successfully", containerName)})
 	return resp.ID, nil
 }
 
 // RemoveContainer removes a container given its ID and a pointer to a Docker client
 // It returns an error if the container removal fails
-func RemoveContainer(cli *client.Client, containerID string) error {
+func RemoveContainer(cli *client.Client, containerID string, p *tea.Program) error {
 	// ContainerRemove options allow you to force stop a container before removing
+	start := time.Now()
 	removeOptions := container.RemoveOptions{
 		Force: true,
 	}
@@ -58,40 +63,44 @@ func RemoveContainer(cli *client.Client, containerID string) error {
 	if err := cli.ContainerRemove(context.Background(), containerID, removeOptions); err != nil {
 		return err
 	}
-
-	fmt.Printf("Container %s removed successfully\n", containerID)
+	end := time.Now()
+	p.Send(resultMsg{end.Sub(start), fmt.Sprintf("Container %s removed successfully", containerID)})
 	return nil
 }
 
 // CreateNetwork creates a new network given the network name and a pointer to a Docker client
 // It returns the network Docker ID and an error if the network creation fails
-func CreateNetwork(name string, client *client.Client) (string, error) {
+func CreateNetwork(name string, client *client.Client, p *tea.Program) (string, error) {
 	// Create the network
+	start := time.Now()
 	network, err := client.NetworkCreate(context.Background(), name, network.CreateOptions{
 		Driver: "bridge",
 	})
 	if err != nil {
 		return "", err
 	}
-	fmt.Printf("Network %s created successfully\n", name)
+	end := time.Now()
+	p.Send(resultMsg{end.Sub(start), fmt.Sprintf("Network %s created successfully", name)})
 
 	return network.ID, nil
 }
 
 // RemoveNetwork removes a network given its ID and a pointer to a Docker client
 // It returns an error if the network removal fails
-func RemoveNetwork(cli *client.Client, networkID string) error {
+func RemoveNetwork(cli *client.Client, networkID string, p *tea.Program) error {
 	// Remove the network
+	start := time.Now()
 	if err := cli.NetworkRemove(context.Background(), networkID); err != nil {
 		return err
 	}
-	fmt.Printf("Network %s removed successfully\n", networkID)
+	end := time.Now()
+	p.Send(resultMsg{end.Sub(start), fmt.Sprintf("Network %s removed successfully", networkID)})
 	return nil
 }
 
 // DeleteAll removes all the containers and networks that contain the image_name and network_name
 // It returns an error if the removal fails
-func DeleteAll(cli *client.Client, config *config.Config) error {
+func DeleteAll(cli *client.Client, config *config.Config, p *tea.Program) error {
 	// Get all the containers
 	containers, err := cli.ContainerList(context.Background(), container.ListOptions{
 		All: true,
@@ -110,7 +119,7 @@ func DeleteAll(cli *client.Client, config *config.Config) error {
 	}
 	// Remove all the selected containers
 	for _, containerID := range containerIDs {
-		err := RemoveContainer(cli, containerID)
+		err := RemoveContainer(cli, containerID, p)
 		if err != nil {
 			return err
 		}
@@ -129,11 +138,12 @@ func DeleteAll(cli *client.Client, config *config.Config) error {
 	}
 	// Remove all the selected networks
 	for _, networkID := range networkIDs {
-		err := RemoveNetwork(cli, networkID)
+		err := RemoveNetwork(cli, networkID, p)
 		if err != nil {
 			return err
 		}
 	}
+	p.Quit()
 	return nil
 }
 
@@ -144,15 +154,16 @@ func ContainerNameFromNodeNumber(nodeNumber int, imageName string) string {
 
 // CreateContainers creates n containers given the image name, the number of containers, the network name and the number of networks and a pointer to a Docker client
 // It returns an error if the container creation fails
-func CreateContainers(cli *client.Client, imageName string, numContainers int, networkName string, numNetworks int) error {
+func CreateContainers(cli *client.Client, imageName string, numContainers int, networkName string, numNetworks int, p *tea.Program) error {
 	cont := 0
 	//for each network
 	for j := 0; j < numNetworks; j++ {
 		netName := networkName + strconv.Itoa(j)
 		//create the n containers
 		for i := 0; i < numContainers; i++ {
+			start := time.Now()
 			containerName := ContainerNameFromNodeNumber(cont, imageName)
-			contId, err := CreateNewContainer(imageName, containerName, netName, cli)
+			contId, err := CreateNewContainer(imageName, containerName, netName, cli, p)
 			if err != nil {
 				return fmt.Errorf("error during the creation of the container: %v", err)
 			}
@@ -160,7 +171,8 @@ func CreateContainers(cli *client.Client, imageName string, numContainers int, n
 			if err != nil {
 				return fmt.Errorf("error during the startup of the container: %v", err)
 			}
-			fmt.Printf("Container %s started successfully\n", containerName)
+			end := time.Now()
+			p.Send(resultMsg{end.Sub(start), fmt.Sprintf("Container %s started successfully", containerName)})
 			cont++
 		}
 	}
@@ -195,15 +207,16 @@ func RestartContainer(cli *client.Client, nodeNumber int, imageName string) erro
 	}
 	sort.Ints(stoppedContainers)
 	i := sort.SearchInts(stoppedContainers, nodeNumber)
-	if i < len(stoppedContainers) && stoppedContainers[i] == nodeNumber {
+	if stoppedContainers != nil && stoppedContainers[i] == nodeNumber {
+		fmt.Printf("Container %d is stopped\n", stoppedContainers[i])
 		err := cli.ContainerStart(context.Background(), containerID, container.StartOptions{})
 		// Restart the container
 		if err != nil {
 			return fmt.Errorf("error during the restart of the container %s:%v", containerID, err)
 		}
-		fmt.Printf("Container %s restarted successfully\n", containerID)
+		fmt.Printf("Container %d restarted successfully\n", nodeNumber)
 	} else {
-		return fmt.Errorf("container %s is not stopped", containerID)
+		fmt.Printf("Container %d is not stopped\n", nodeNumber)
 	}
 	return nil
 }
@@ -232,10 +245,10 @@ func GetStoppedContainers() []int {
 
 // CreateNetworks creates n networks given the network name and the number of networks and a pointer to a Docker client
 // It returns an error if the network creation fails
-func CreateNetworks(cli *client.Client, networkName string, numNetworks int) error {
+func CreateNetworks(cli *client.Client, networkName string, numNetworks int, p *tea.Program) error {
 	for i := 0; i < numNetworks; i++ {
 		netName := networkName + strconv.Itoa(i)
-		_, err := CreateNetwork(netName, cli)
+		_, err := CreateNetwork(netName, cli, p)
 		if err != nil {
 			return fmt.Errorf("error during the creation of the networks: %v", err)
 		}
@@ -296,7 +309,7 @@ func ConnectNetworks(cli *client.Client, network1 int, network2 int, networkName
 
 // CreateLinks creates the links between the networks given the pointer to a Docker client and a pointer to the config struct
 // It returns an error if the linking fails
-func CreateLinks(cli *client.Client, config *config.Config) error {
+func CreateLinks(cli *client.Client, config *config.Config, p *tea.Program) error {
 	if config.NetMatrix == nil {
 		config.NetMatrix = *CreateMatrix(*config.NumNetworks)
 	}
@@ -304,11 +317,14 @@ func CreateLinks(cli *client.Client, config *config.Config) error {
 	for i := 0; i < *config.NumNetworks; i++ {
 		for j := 0; j < *config.NumNetworks; j++ {
 			if (config.NetMatrix)[i][j] && i != j { // If there is a link between the networks and they are different
+				start := time.Now()
 				// Connect the containers to the network
 				err := ConnectNetworks(cli, i, j, *config.NetworkName, *config.ImageName, *config.NumContainers, *config.NumNetworks, *config.NumLinks)
 				if err != nil {
 					return fmt.Errorf("error during the linking of 2 networks: %v", err)
 				}
+				end := time.Now()
+				p.Send(resultMsg{end.Sub(start), fmt.Sprintf("Network %d linked to network %d", i, j)})
 			}
 		}
 	}
@@ -377,6 +393,31 @@ func PrintMatrix(matrix *[][]bool, numNetwork int) {
 		}
 		fmt.Println()
 	}
+}
+
+// CreateVirtualEnviroment creates the virtual environment given a pointer to a Docker client and a pointer to the config struct
+// It returns an error if the creation fails
+func CreateVirtualEnviroment(cli *client.Client, config *config.Config, p *tea.Program) error {
+	// Create the networks
+	err := CreateNetworks(cli, *config.NetworkName, *config.NumNetworks, p)
+	if err != nil {
+		return fmt.Errorf("error during the creation of the networks: %v", err)
+	}
+	// Create the containers
+	err = CreateContainers(cli, *config.ImageName, *config.NumContainers, *config.NetworkName, *config.NumNetworks, p)
+	if err != nil {
+		return fmt.Errorf("error during the creation of the containers: %v", err)
+	}
+	// Create the links if there are more than 1 network
+	if *config.NumNetworks > 1 {
+		err = CreateLinks(cli, config, p)
+		if err != nil {
+			return fmt.Errorf("error during the creation of the links: %v", err)
+		}
+	}
+	p.Quit()
+
+	return nil
 }
 
 func GetGraphEncoding(config *config.Config) gin.H {
